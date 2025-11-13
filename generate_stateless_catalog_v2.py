@@ -13,7 +13,7 @@ from __future__ import annotations
 import unicodedata
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import arabic_reshaper
 from bidi.algorithm import get_display
@@ -44,7 +44,76 @@ ROOT = Path(__file__).resolve().parent
 FONT_DIR = ROOT / "assets" / "fonts"
 SOURCE_TXT = ROOT / "main-content.txt"
 OUTPUT_PDF = ROOT / "stateless-as-wind-cataloge-v2.pdf"
-GALLERY_DIR = ROOT / "extracted_images"
+PHOTO_LIBRARY = ROOT / "assets" / "photos"
+
+SECTION_IMAGE_PLAN: Dict[str, Dict[str, object]] = {
+    "Cover": {
+        "files": ["photo01.png"],
+        "max_height": 340.0,
+        "top_space": 16.0,
+        "bottom_space": 12.0,
+        "max_width_ratio": 0.9,
+    },
+    "Contact": {
+        "files": ["photo02.jpeg"],
+        "max_height": 300.0,
+        "top_space": 18.0,
+        "max_width_ratio": 0.82,
+    },
+    "Logline": {
+        "files": ["photo03.png"],
+        "max_height": 300.0,
+        "top_space": 18.0,
+        "max_width_ratio": 0.9,
+    },
+    "Synopsis": {
+        "files": ["photo04.jpeg", "photo05.jpeg"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+        "between_space": 14.0,
+        "max_width_ratio": 0.92,
+    },
+    "Artistic Approach": {
+        "files": ["photo06.jpeg"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+    "Director's Notes": {
+        "files": ["photo07.png"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+    "Producer's Note": {
+        "files": ["photo08.png"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+    "Finance Plan": {
+        "files": ["photo09.png"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+    "Outlook & Distribution": {
+        "files": ["photo10.png"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+    "Biography": {
+        "files": ["photo11.png"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+    "Filmography": {
+        "files": ["photo12.png"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+    "Awards": {
+        "files": ["photo13.jpeg"],
+        "max_height": 320.0,
+        "top_space": 24.0,
+    },
+}
 
 THEME = {
     "background": colors.HexColor("#eef2f6"),
@@ -593,6 +662,7 @@ def build_image_flowables(
     image_dir: Path,
     max_width: float,
     max_height: float = 460,
+    skip_names: Optional[Set[str]] = None,
 ) -> List[object]:
     """Create flowables for images in the extracted_images directory."""
     flowables: List[object] = []
@@ -600,11 +670,14 @@ def build_image_flowables(
         return flowables
 
     allowed_suffixes = {".png", ".jpg", ".jpeg"}
+    ignored = skip_names or set()
 
     for path in sorted(image_dir.iterdir()):
         if not path.is_file():
             continue
         if path.suffix.lower() not in allowed_suffixes:
+            continue
+        if path.name in ignored:
             continue
 
         try:
@@ -630,6 +703,73 @@ def build_image_flowables(
         flowables.pop()
 
     return flowables
+
+
+def make_image_flowable(image_path: Path, max_width: float, max_height: float) -> Optional[Image]:
+    """Create a single scaled image flowable if the file exists."""
+    if not image_path.exists():
+        print(f"Missing image {image_path.name}")
+        return None
+
+    try:
+        reader = ImageReader(str(image_path))
+        width, height = reader.getSize()
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"Skipping {image_path.name}: {exc}")
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+
+    scale = min(max_width / width, max_height / height, 1.0)
+    target_width = width * scale
+    target_height = height * scale
+
+    image = Image(str(image_path), width=target_width, height=target_height)
+    image.hAlign = "CENTER"
+    return image
+
+
+def append_section_images(
+    story: List[object],
+    section_key: str,
+    doc_width: float,
+    used_images: Set[str],
+) -> None:
+    """Append configured images for a section, tracking the files already used."""
+    plan = SECTION_IMAGE_PLAN.get(section_key)
+    if not plan:
+        return
+
+    files = plan.get("files", [])
+    if not files:
+        return
+
+    max_height = float(plan.get("max_height", 320.0))
+    max_width_ratio = float(plan.get("max_width_ratio", 0.92))
+    top_space = float(plan.get("top_space", 18.0))
+    between_space = float(plan.get("between_space", 12.0))
+    bottom_space = float(plan.get("bottom_space", 0.0))
+
+    flowables: List[object] = []
+    for filename in files:
+        path = PHOTO_LIBRARY / str(filename)
+        image = make_image_flowable(path, doc_width * max_width_ratio, max_height)
+        if image:
+            flowables.append(image)
+            used_images.add(path.name)
+
+    if not flowables:
+        return
+
+    if top_space:
+        story.append(Spacer(1, top_space))
+    for idx, image in enumerate(flowables):
+        story.append(image)
+        if idx != len(flowables) - 1:
+            story.append(Spacer(1, between_space))
+    if bottom_space:
+        story.append(Spacer(1, bottom_space))
 
 
 def main() -> None:
@@ -662,6 +802,7 @@ def main() -> None:
     doc.addPageTemplates(PageTemplate(id="main", frames=[frame], onPage=draw_background))
 
     story: List[object] = []
+    used_images: Set[str] = set()
 
     # --- Cover Spread -----------------------------------------------------
     story.append(Spacer(1, 12))
@@ -712,6 +853,7 @@ def main() -> None:
         )
 
     story.append(Spacer(1, 18))
+    append_section_images(story, "Cover", doc.width, used_images)
 
     # --- General Information ---------------------------------------------
     general_pairs = []
@@ -742,6 +884,7 @@ def main() -> None:
         story.append(Spacer(1, 8))
         for entry in contact_lines:
             story.append(Paragraph(entry.strip(), styles["Body"]))
+        append_section_images(story, "Contact", doc.width, used_images)
 
     # --- Logline ----------------------------------------------------------
     logline_lines = [line for line in sections.get("Logline", []) if line.strip()]
@@ -751,6 +894,7 @@ def main() -> None:
         story.append(section_heading("Logline", doc.width, styles))
         story.append(Spacer(1, 10))
         story.append(callout_box(logline_text, doc.width, styles))
+        append_section_images(story, "Logline", doc.width, used_images)
 
     # --- Synopsis ---------------------------------------------------------
     synopsis_lines = sections.get("Synopsis", [])
@@ -763,6 +907,7 @@ def main() -> None:
             if not cleaned:
                 continue
             story.append(Paragraph(cleaned, styles["Body"]))
+        append_section_images(story, "Synopsis", doc.width, used_images)
 
     # --- Artistic Approach ------------------------------------------------
     artistic_lines = sections.get("Artistic Approach", [])
@@ -773,6 +918,7 @@ def main() -> None:
         paragraphs = coalesce_paragraphs(artistic_lines)
         for text in paragraphs:
             story.append(Paragraph(text, styles["Body"]))
+        append_section_images(story, "Artistic Approach", doc.width, used_images)
 
     # --- Director's Notes -------------------------------------------------
     director_lines = sections.get("Director's Notes", [])
@@ -783,6 +929,7 @@ def main() -> None:
         paragraphs = coalesce_paragraphs(director_lines)
         for text in paragraphs:
             story.append(Paragraph(text, styles["Body"]))
+        append_section_images(story, "Director's Notes", doc.width, used_images)
 
     # --- Producer's Note --------------------------------------------------
     producer_lines = [line for line in sections.get("Producer's Note", []) if line]
@@ -791,6 +938,7 @@ def main() -> None:
         story.append(section_heading("Producer’s Note", doc.width, styles))
         story.append(Spacer(1, 6))
         story.append(accent_list(producer_lines, styles))
+        append_section_images(story, "Producer's Note", doc.width, used_images)
 
     # --- Finance Plan -----------------------------------------------------
     finance_lines = sections.get("Finance Plan", [])
@@ -801,6 +949,7 @@ def main() -> None:
         paragraphs = coalesce_paragraphs(finance_lines)
         for text in paragraphs:
             story.append(Paragraph(text, styles["Body"]))
+        append_section_images(story, "Finance Plan", doc.width, used_images)
 
     # --- Outlook & Distribution ------------------------------------------
     outlook_lines = sections.get("Outlook & Distribution", [])
@@ -811,6 +960,7 @@ def main() -> None:
         paragraphs = coalesce_paragraphs(outlook_lines)
         for text in paragraphs:
             story.append(Paragraph(text, styles["Body"]))
+        append_section_images(story, "Outlook & Distribution", doc.width, used_images)
 
     # --- Biography --------------------------------------------------------
     bio_lines = sections.get("Biography", [])
@@ -824,6 +974,7 @@ def main() -> None:
             if idx == 0:
                 style = styles["BodyCenter"]
             story.append(Paragraph(text, style))
+        append_section_images(story, "Biography", doc.width, used_images)
 
     # --- Filmography ------------------------------------------------------
     film_lines = sections.get("Filmography", [])
@@ -837,6 +988,7 @@ def main() -> None:
             story.append(Paragraph(header, styles["Small"]))
             story.append(Spacer(1, 6))
             story.append(accent_list(cleaned[1:], styles))
+            append_section_images(story, "Filmography", doc.width, used_images)
 
     # --- Festivals --------------------------------------------------------
     festivals = sections.get("Festivals", [])
@@ -853,6 +1005,7 @@ def main() -> None:
         story.append(section_heading("Awards", doc.width, styles))
         story.append(Spacer(1, 8))
         story.append(accent_list(awards, styles))
+        append_section_images(story, "Awards", doc.width, used_images)
 
     # --- TV Broadcast -----------------------------------------------------
     tv_lines = sections.get("TV Broadcast", [])
@@ -889,7 +1042,9 @@ def main() -> None:
         if entries:
             story.append(links_panel(entries, doc.width, styles))
 
-    gallery_flowables = build_image_flowables(GALLERY_DIR, doc.width)
+    gallery_flowables = build_image_flowables(
+        PHOTO_LIBRARY, doc.width * 0.92, max_height=420, skip_names=used_images
+    )
     if gallery_flowables:
         story.append(PageBreak())
         story.append(section_heading("Visual References", doc.width, styles))
