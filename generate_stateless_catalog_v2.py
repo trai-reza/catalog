@@ -21,15 +21,18 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, StyleSheet1
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
+    Image,
     ListFlowable,
     ListItem,
     PageTemplate,
+    PageBreak,
     Paragraph,
     Spacer,
     Table,
@@ -41,6 +44,7 @@ ROOT = Path(__file__).resolve().parent
 FONT_DIR = ROOT / "assets" / "fonts"
 SOURCE_TXT = ROOT / "main-content.txt"
 OUTPUT_PDF = ROOT / "stateless-as-wind-cataloge-v2.pdf"
+GALLERY_DIR = ROOT / "extracted_images"
 
 THEME = {
     "background": colors.HexColor("#eef2f6"),
@@ -585,6 +589,49 @@ def coalesce_paragraphs(lines: Sequence[str]) -> List[str]:
     return paragraphs
 
 
+def build_image_flowables(
+    image_dir: Path,
+    max_width: float,
+    max_height: float = 460,
+) -> List[object]:
+    """Create flowables for images in the extracted_images directory."""
+    flowables: List[object] = []
+    if not image_dir.exists():
+        return flowables
+
+    allowed_suffixes = {".png", ".jpg", ".jpeg"}
+
+    for path in sorted(image_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in allowed_suffixes:
+            continue
+
+        try:
+            reader = ImageReader(str(path))
+            width, height = reader.getSize()
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"Skipping {path.name}: {exc}")
+            continue
+
+        if width <= 0 or height <= 0:
+            continue
+
+        scale = min(max_width / width, max_height / height, 1.0)
+        target_width = width * scale
+        target_height = height * scale
+
+        image = Image(str(path), width=target_width, height=target_height)
+        image.hAlign = "CENTER"
+        flowables.append(image)
+        flowables.append(Spacer(1, 18))
+
+    if flowables and isinstance(flowables[-1], Spacer):
+        flowables.pop()
+
+    return flowables
+
+
 def main() -> None:
     register_fonts()
     styles = build_styles()
@@ -841,6 +888,13 @@ def main() -> None:
 
         if entries:
             story.append(links_panel(entries, doc.width, styles))
+
+    gallery_flowables = build_image_flowables(GALLERY_DIR, doc.width)
+    if gallery_flowables:
+        story.append(PageBreak())
+        story.append(section_heading("Visual References", doc.width, styles))
+        story.append(Spacer(1, 12))
+        story.extend(gallery_flowables)
 
     doc.build(story)
     print(f"Created {OUTPUT_PDF.relative_to(ROOT)}")
