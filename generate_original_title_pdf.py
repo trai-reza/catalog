@@ -102,9 +102,12 @@ def parse_sections(lines: List[str]) -> dict:
         "artistic approach": "Artistic Approach",
         "visual material": "Visual Material",
         "director's notes": "Director's Notes",
+        "directors notes": "Director's Notes",
         "producer's note": "Producer's Note",
+        "producers note": "Producer's Note",
         "finance plan": "Finance Plan",
         "outlook & distribution": "Outlook & Distribution",
+        "outlook and distribution": "Outlook & Distribution",
         "biography": "Biography",
         "filmography": "Filmography",
         "festivals": "Festivals",
@@ -122,10 +125,20 @@ def parse_sections(lines: List[str]) -> dict:
         
         # Check if this line is a section heading (exact match or starts with keyword)
         found_section = False
-        line_lower = line_stripped.lower().rstrip(":")
+        line_lower = line_stripped.lower().strip()
+        # Normalize apostrophes (curly quotes to straight apostrophes)
+        line_lower = line_lower.replace('\u2019', "'").replace('\u2018', "'")
+        # Remove colon and any trailing whitespace for comparison
+        line_clean = line_lower.rstrip(":").strip()
         
         for keyword, section_name in section_keywords.items():
-            if line_lower == keyword or line_lower.startswith(keyword + ":"):
+            keyword_clean = keyword.strip()
+            # Check multiple patterns: exact match, with colon, with trailing space, etc.
+            if (line_clean == keyword_clean or 
+                line_clean == keyword_clean + ":" or 
+                line_clean.startswith(keyword_clean + ":") or
+                line_clean.startswith(keyword_clean + " ") or
+                line_lower.startswith(keyword_clean)):
                 # Save previous section
                 if current_section and current_content:
                     sections[current_section] = current_content
@@ -487,6 +500,10 @@ def main() -> None:
     sections = parse_sections(lines)
     cover_info = extract_cover_info(lines)
     
+    # Debug: Print what sections were found
+    print(f"Found {len(sections)} sections: {', '.join(sections.keys())}")
+    print(f"Cover info extracted: title={bool(cover_info['title'])}, original_title={bool(cover_info['original_title'])}")
+    
     # Create PDF document
     doc = BaseDocTemplate(
         str(OUTPUT_PDF),
@@ -515,12 +532,16 @@ def main() -> None:
     # === FIRST PAGE: Cover with photo01.png ===
     story.append(Spacer(1, 20))
     
-    # Title
+    # Title - always add at least the main title
     if cover_info["title"]:
         story.append(Paragraph(cover_info["title"], styles["CoverSubtitle"]))
+    else:
+        story.append(Paragraph("Stateless as wind, 2015_2025", styles["CoverSubtitle"]))
     story.append(Paragraph("Stateless as Wind", styles["CoverTitle"]))
     if cover_info["subtitle"]:
         story.append(Paragraph(cover_info["subtitle"], styles["CoverSubtitle"]))
+    else:
+        story.append(Paragraph("Autobiographical Documentary by Samereh Rezaei / Jala Film", styles["CoverSubtitle"]))
     
     story.append(Spacer(1, 12))
     story.append(accent_rule(doc.width))
@@ -750,6 +771,7 @@ def main() -> None:
                     story.append(Paragraph(line.strip(), styles["Body"]))
     
     # Build PDF
+    print(f"Building PDF with {len(story)} flowables...")
     doc.build(story)
     print(f"✓ Created {OUTPUT_PDF.name}")
 
